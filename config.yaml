@@ -10,14 +10,19 @@ data:
   class_names: ["aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person", "pottedplant", "sheep", "sofa", "train", "tvmonitor"]
 
 train:
+  device: "cuda:0"
+  num_workers: 4
+  data_dir: "dataset/PVZ_Lawn"
+  continue_model: '' # 继续训练的模型路径
   batch_size: 8
   epochs: 100
+  save_interval: 10
+
   learning_rate: 0.001
   momentum: 0.9
   weight_decay: 0.0005
-  save_interval: 10
   patience: 10 # Early stopping patience
-  num_workers: 4
+
 
 output:
   log_dir: "e:\\my_workspace\\yolo2_QR\\logs"
