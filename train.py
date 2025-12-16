@@ -77,7 +77,7 @@ def main():
     logger = setup_logger(run_log_dir)
     recorder = TrainingRecorder(run_log_dir)
     
-    logger.info(f"本次训练 Log 目录: {run_log_dir}", f"使用设备：{device}")
+    logger.info(f"本次训练 Log 目录: {run_log_dir}, 使用设备：{device}")
     
     # 3. 数据准备
     logger.info("正在初始化锚框...")
@@ -115,8 +115,9 @@ def main():
         logger=logger,
         recorder=recorder,
         config=config,
-        save_dir=run_ckpt_dir,
-        anchors=anchors
+        ckpt_dir=run_ckpt_dir,
+        anchors=anchors,
+        num_classes=config['num_classes']
     )
     
     # 6. 开始训练

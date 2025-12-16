@@ -1,5 +1,3 @@
-
-
 train:
   device: "cuda:0"
   num_workers: 4
@@ -11,8 +9,8 @@ train:
 
   # 训练参数
   batch_size: 8
-  epochs: 120
-  save_interval: 1
+  epochs: 200
+  save_interval: 10
 
   # 训练超参数
   learning_rate: 0.001
@@ -22,6 +20,6 @@ train:
   log_dir: "e:\\my_workspace\\yolo2\\logs"
 
   # 阈值配置
-  conf_thresh: 0.25      # 置信度阈值 (用于 NMS 前过滤)
+  conf_thresh: 0.4      # 置信度阈值 (用于 NMS 前过滤)
   nms_thresh: 0.45       # NMS IoU 阈值 (用于非极大值抑制)
-  iou_thresh: 0.5        # 评估 IoU 阈值 (用于计算 mAP/TP)
+  iou_thresh: 0.6        # 评估 IoU 阈值 (用于计算 mAP/TP)

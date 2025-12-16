@@ -22,13 +22,14 @@ class Trainer:
         optimizer: torch.optim.Optimizer,
         device: torch.device,
         anchors: List[Tuple[float, float]],
-        num_classes: int,
-        epochs: int,
-        ckpt_dir: str,
-        logger: logging.Logger,
+        num_classes: int = 20,
+        epochs: int = 100,
+        ckpt_dir: str = 'checkpoints',
+        logger: logging.Logger = None,
         recorder: Optional[TrainingRecorder] = None,
         save_interval: int = 1,
-        base_img_size: int = 416
+        base_img_size: int = 416,
+        config: Optional[Dict[str, Any]] = None
     ):
         self.model = model
         self.dataloader = dataloader
@@ -42,6 +43,7 @@ class Trainer:
         self.recorder = recorder
         self.save_interval = save_interval
         self.base_img_size = base_img_size
+        self.config = config or {}
         
         self.start_epoch = 1
         
@@ -106,9 +108,12 @@ class Trainer:
         S = current_img_size // 32
         
         # 实时计算 metrics (注意：这是在训练集上)
-        # 将 conf_thresh 提高到 0.25 以减少低置信度的误检，使指标更符合视觉效果
-        # iou_thresh 设置为 0.5，这是标准的 mAP@0.5 计算标准
-        metrics = DetectionMetrics(iou_thresh=0.5, conf_thresh=0.25)
+        # 从配置中获取阈值，如果不存在则使用默认值
+        conf_thresh = self.config.get('conf_thresh', 0.25)
+        iou_thresh = self.config.get('iou_thresh', 0.5)
+        nms_thresh = self.config.get('nms_thresh', 0.45)
+        
+        metrics = DetectionMetrics(iou_thresh=iou_thresh, conf_thresh=conf_thresh, nms_thresh=nms_thresh)
         
         iterator = tqdm(self.dataloader, desc=f"Epoch {epoch}", leave=False)
         
@@ -158,11 +163,20 @@ class Trainer:
             
         return avg_loss
 
-    def fit(self) -> None:
+    def train(self, epochs: int, save_interval: int) -> None:
         """
         开始训练循环。
+        
+        Args:
+            epochs: 总训练轮数 (如果不指定，使用初始化时的 self.epochs)
+            save_interval: 保存间隔 (如果不指定，使用初始化时的 self.save_interval)
         """
-        self.logger.info("开始训练...")
+        if epochs is not None:
+            self.epochs = epochs
+        if save_interval is not None:
+            self.save_interval = save_interval
+            
+        self.logger.info(f"开始训练... 总 Epochs: {self.epochs}, 保存间隔: {self.save_interval}")
         
         for epoch in range(self.start_epoch, self.epochs + 1):
             # 多尺度训练：每个 Epoch 随机选择一个尺寸
