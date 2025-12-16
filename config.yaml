@@ -1,29 +1,27 @@
-model:
-  name: "yolov2"
-  num_classes: 20
-  anchors: [[1.3221, 1.73145], [3.19275, 4.00944], [5.05587, 8.09892], [9.47112, 4.84053], [11.2364, 10.0071]] # Example anchors for VOC
-  input_size: [416, 416]
 
-data:
-  train_path: "e:\\my_workspace\\yolo2_QR\\dataset\\train"
-  val_path: "e:\\my_workspace\\yolo2_QR\\dataset\\val"
-  class_names: ["aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person", "pottedplant", "sheep", "sofa", "train", "tvmonitor"]
 
 train:
   device: "cuda:0"
   num_workers: 4
   data_dir: "dataset/PVZ_Lawn"
-  continue_model: '' # 继续训练的模型路径
+  num_anchors: 5
+  base_img_size: 416
+  continue_model: 'logs\20251216_200831\checkpoints\epoch_100.pth' # 继续训练的模型路径
+  num_classes: 24
+
+  # 训练参数
   batch_size: 8
-  epochs: 100
-  save_interval: 10
+  epochs: 120
+  save_interval: 1
 
+  # 训练超参数
   learning_rate: 0.001
-  momentum: 0.9
-  weight_decay: 0.0005
-  patience: 10 # Early stopping patience
+  momentum: 0.9 # 动量
+  weight_decay: 0.0005  # 权重衰减
 
+  log_dir: "e:\\my_workspace\\yolo2\\logs"
 
-output:
-  log_dir: "e:\\my_workspace\\yolo2_QR\\logs"
-  checkpoint_dir: "e:\\my_workspace\\yolo2_QR\\checkpoints"
+  # 阈值配置
+  conf_thresh: 0.25      # 置信度阈值 (用于 NMS 前过滤)
+  nms_thresh: 0.45       # NMS IoU 阈值 (用于非极大值抑制)
+  iou_thresh: 0.5        # 评估 IoU 阈值 (用于计算 mAP/TP)

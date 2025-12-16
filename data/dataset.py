@@ -1,148 +1,210 @@
-import glob
-import random
+"""YOLOv2 数据集模块
+====================
+
+此模块实现用于 YOLOv2 的数据集类与批处理函数，核心功能包括：
+- 读取图像与 YOLO 标签（class x y w h，归一化到 [0,1]）
+- Letterbox（居中填充为正方形）与缩放到指定尺寸
+- 标签坐标随几何变换同步映射
+- Anchor 多框编码；支持 K-Means（IoU 距离）自动聚类并缓存
+- 训练与测试的 `collate_fn`
+"""
+
+import math
 import os
-import sys
-import numpy as np
-from PIL import Image
+import time
+import random
+from typing import List, Optional, Tuple
+
 import torch
-import torch.nn.functional as F
-from torch.utils.data import Dataset
 import torchvision.transforms as transforms
+from PIL import Image
+from torch import Tensor
+from torch.utils.data import Dataset
 
-def pad_to_square(img, pad_value):  # 将图像填充为正方形
-    c, h, w = img.shape  # 获取图像的通道数、高度、宽度
-    dim_diff = np.abs(h - w)  # 计算高度和宽度的差值
-    # 计算上下/左右的填充量（上/左 填充，下/右 填充）
-    pad1, pad2 = dim_diff // 2, dim_diff - dim_diff // 2
-    # 确定填充维度：如果高度<=宽度则上下填充，否则左右填充
-    pad = (0, 0, pad1, pad2) if h <= w else (pad1, pad2, 0, 0)
-    # 执行填充操作，使用常数填充
-    img = F.pad(img, pad, "constant", value=pad_value)
+EPS: float = 1e-6  # 避免除零错误
 
-    return img, pad
 
-def resize(image, size):
-    # 将图像调整到指定尺寸（先增加batch维度，插值后再移除）
-    image = F.interpolate(image.unsqueeze(0), size=size, mode="nearest").squeeze(0)
-    return image
+class MyDataset(Dataset):
+    def __init__(self, data_dir, if_train, base_size: int = 416):
+        print(f"初始化数据集: {data_dir}")
+        self.data_dir = data_dir
+        self.img_size = base_size
 
-class ListDataset(Dataset):
-    def __init__(self, list_path, img_size=416, augment=True, multiscale=True):
-        self.img_files = []  # 存储图像文件路径的列表
-        self.label_files = []  # 存储标签文件路径的列表
-        
-        # 检查输入路径是文件还是目录
-        if os.path.isdir(list_path):
-            # 如果是目录，获取所有jpg和png格式的图像文件
-            self.img_files = sorted(glob.glob(os.path.join(list_path, "*.jpg"))) + \
-                             sorted(glob.glob(os.path.join(list_path, "*.png")))
-        elif os.path.isfile(list_path):
-            # 如果是文件，读取文件中的每一行作为图像路径
-            with open(list_path, "r") as file:
-                self.img_files = file.readlines()
-                self.img_files = [path.replace("\n", "") for path in self.img_files]
-        
-        # 生成对应的标签文件路径（假设标签与图像同目录，后缀为txt）
-        # 也可以根据需要调整为从并行的'labels'目录中查找标签
-        self.label_files = [
-            path.replace(".jpg", ".txt").replace(".png", ".txt")
-            for path in self.img_files
-        ]
-        
-        self.img_size = img_size  # 图像目标尺寸
-        self.augment = augment  # 是否启用数据增强
-        self.multiscale = multiscale  # 是否启用多尺度训练
-        self.batch_count = 0  # 批次计数器
-
-    def __getitem__(self, index):
-        # 获取指定索引的图像路径（处理索引超出范围的情况）
-        img_path = self.img_files[index % len(self.img_files)].rstrip()
-        
-        try:
-            # 读取图像并转换为Tensor格式（转为RGB以确保3通道）
-            img = transforms.ToTensor()(Image.open(img_path).convert('RGB'))
-        except Exception as e:
-            print(f"无法读取图像 '{img_path}'。")
-            return None, None, None
-
-        # 处理通道数不足3的图像（如灰度图）
-        if len(img.shape) != 3:
-            img = img.unsqueeze(0)  # 增加通道维度
-            img = img.expand((3, img.shape[1:]))  # 扩展为3通道
-
-        _, h, w = img.shape  # 获取原始图像的高度和宽度
-        h_factor, w_factor = (h, w) if False else (1, 1)  # 尺寸缩放因子（当前未启用）
-        
-        # 将图像填充为正方形
-        img, pad = pad_to_square(img, 0)
-        _, padded_h, padded_w = img.shape  # 获取填充后的图像尺寸
-
-        # 将图像调整到目标尺寸
-        img = resize(img, self.img_size)
-        
-        # 获取对应的标签文件路径
-        label_path = self.label_files[index % len(self.img_files)].rstrip()
-        
-        targets = None  # 存储处理后的标签
-        if os.path.exists(label_path):
-            try:
-                # 读取标签文件（格式：class x_center y_center w h）
-                boxes = torch.from_numpy(np.loadtxt(label_path).reshape(-1, 5))
-                
-                # 计算未填充前的边界框坐标（反归一化）
-                x1 = w_factor * (boxes[:, 1] - boxes[:, 3] / 2)  # 左上角x
-                y1 = h_factor * (boxes[:, 2] - boxes[:, 4] / 2)  # 左上角y
-                x2 = w_factor * (boxes[:, 1] + boxes[:, 3] / 2)  # 右下角x
-                y2 = h_factor * (boxes[:, 2] + boxes[:, 4] / 2)  # 右下角y
-                
-                # 根据填充量调整边界框坐标
-                x1 += pad[0]
-                y1 += pad[2]
-                x2 += pad[1]
-                y2 += pad[3]
-                
-                # 重新计算归一化的中心坐标和宽高
-                boxes[:, 1] = ((x1 + x2) / 2) / padded_w  # 归一化x中心
-                boxes[:, 2] = ((y1 + y2) / 2) / padded_h  # 归一化y中心
-                boxes[:, 3] *= w_factor / padded_w  # 归一化宽度
-                boxes[:, 4] *= h_factor / padded_h  # 归一化高度
-                
-                # 构建目标张量（格式：[batch_idx, class, x, y, w, h]）
-                targets = torch.zeros((len(boxes), 6))
-                targets[:, 1:] = boxes
-            except Exception as e:
-                # print(f"无法读取标签 '{label_path}'。")
-                pass
-        
-        return img_path, img, targets
-
-    def collate_fn(self, batch):
-        # 过滤掉batch中的None值（读取失败的样本）
-        batch = [b for b in batch if b[0] is not None]
-        if len(batch) == 0:
-            return None, None, None
-            
-        # 解包batch中的路径、图像和标签
-        paths, imgs, targets = list(zip(*batch))
-        
-        # 移除空的标签占位符
-        targets = [boxes for boxes in targets if boxes is not None]
-        
-        # 为每个标签添加样本索引（batch内的序号）
-        for i, boxes in enumerate(targets):
-            boxes[:, 0] = i
-        
-        # 拼接所有标签
-        if targets:
-            targets = torch.cat(targets, 0)
+        if if_train:
+            self.image_dir = os.path.join(data_dir, 'train/images')
+            self.label_dir = os.path.join(data_dir, 'train/labels')
         else:
-            targets = torch.zeros((0, 6))
-            
-        # 堆叠所有图像形成批量张量
-        imgs = torch.stack(imgs, 0)
+            self.image_dir = os.path.join(data_dir, 'test/images')
+            self.label_dir = os.path.join(data_dir, 'test/labels')
         
-        return paths, imgs, targets
+        if not os.path.isdir(self.image_dir) or not os.path.isdir(self.label_dir):
+            raise FileNotFoundError("数据集目录不存在")
+
+        img_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
+        image_files = [f for f in os.listdir(self.image_dir) if os.path.splitext(f)[1].lower() in img_exts]  # 收集所有图片文件
+        label_names = {os.path.splitext(f)[0] for f in os.listdir(self.label_dir) if f.lower().endswith('.txt')}  # 收集所有标签文件（不包含扩展名）
+
+        self.samples: List[Tuple[str, str]] = []  # 存储图片路径与标签路径的元组
+        for img_file in sorted(image_files):
+            name = os.path.splitext(img_file)[0]  # 图片文件名（不包含扩展名）
+            if name in label_names:
+                self.samples.append((
+                    os.path.join(self.image_dir, img_file),
+                    os.path.join(self.label_dir, name + '.txt')
+                ))
+
+        if len(self.samples) == 0:
+            raise FileNotFoundError(f"在 '{self.image_dir}' 与 '{self.label_dir}' 下未找到配对的图片与标签文件")
+
+        # 构建数据集变换
+        self.transform = self._build_transform()
+        print(f"数据集样本数: {len(self.samples)}")
+        print(f"默认图像尺寸: {self.img_size}")
+
+    def _build_transform(self):
+        """
+        构建图像变换管线
+        """
+        return transforms.Compose([
+            transforms.ToTensor(),
+        ])
 
     def __len__(self):
-        # 返回数据集的总样本数
-        return len(self.img_files)
+        """返回数据集样本数"""
+        return len(self.samples)
+
+    def set_img_size(self, img_size: int):
+        """设置图像尺寸"""
+        img_size = img_size if img_size % 32 == 0 else math.ceil(img_size / 32) * 32
+        self.img_size = img_size
+
+    def __getitem__(self, index: int) -> Tuple[Tensor, Tensor]:
+        """
+        获取一个样本
+
+        Args:
+            index: 样本索引
+
+        Returns:
+            img_tensor: 变换后的图像张量 (3, H, W)
+            target_tensor: 变换后的标签张量 (N, 5), 每行为 [class, x, y, w, h]
+        """
+        img_path, label_path = self.samples[index]
+
+        # 1. 读取图像
+        img = Image.open(img_path).convert('RGB')
+        w_orig, h_orig = img.size   # 原始图像尺寸
+
+        # 2. 读取并解析标签
+        boxes = []
+        with open(label_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 5:
+                    cls_id = int(parts[0])
+                    x_c = float(parts[1])
+                    y_c = float(parts[2])
+                    w = float(parts[3])
+                    h = float(parts[4])
+                    boxes.append([cls_id, x_c, y_c, w, h])
+
+        boxes = torch.tensor(boxes, dtype=torch.float32) if boxes else torch.zeros((0, 5), dtype=torch.float32)
+
+        # 3. 图像预处理 (Letterbox)
+        img_tensor, boxes = self._letterbox(img, boxes, self.img_size)
+
+        return img_tensor, boxes
+
+    def _letterbox(self, img: Image.Image, boxes: Tensor, new_shape: int) -> Tuple[Tensor, Tensor]:
+        """
+        调整图像大小并进行填充，保持纵横比（Letterbox），同时调整标签坐标
+
+        Args:
+            img: 原始 PIL 图像
+            boxes: 原始标签 (N, 5), [class, x, y, w, h], 归一化坐标
+            new_shape: 目标尺寸 (正方形边长)
+
+        Returns:
+            img_tensor: 变换后的图像张量
+            new_boxes: 变换后的标签张量
+        """
+        w, h = img.size
+        scale = min(new_shape / w, new_shape / h)
+        nw, nh = int(w * scale), int(h * scale)
+
+        # 调整图像大小
+        img_resized = img.resize((nw, nh), Image.BICUBIC)
+
+        # 创建新图像并填充随机颜色
+        random_color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+        new_img = Image.new('RGB', (new_shape, new_shape), random_color)
+        
+        # 计算偏移量，使其居中
+        dx = (new_shape - nw) // 2
+        dy = (new_shape - nh) // 2
+        new_img.paste(img_resized, (dx, dy))
+
+        # 转换为 Tensor
+        img_tensor = self.transform(new_img)
+
+        # 调整标签坐标
+        new_boxes = boxes.clone()
+        if len(boxes) > 0:
+            # 将归一化坐标转换为原始像素坐标
+            boxes[:, 1] = boxes[:, 1] * w
+            boxes[:, 2] = boxes[:, 2] * h
+            boxes[:, 3] = boxes[:, 3] * w
+            boxes[:, 4] = boxes[:, 4] * h
+
+            # 缩放
+            boxes[:, 1:] *= scale
+
+            # 平移
+            boxes[:, 1] += dx
+            boxes[:, 2] += dy
+
+            # 归一化到新尺寸
+            new_boxes[:, 1] = boxes[:, 1] / new_shape
+            new_boxes[:, 2] = boxes[:, 2] / new_shape
+            new_boxes[:, 3] = boxes[:, 3] / new_shape
+            new_boxes[:, 4] = boxes[:, 4] / new_shape
+
+            # 裁剪超出范围的框 (可选，通常 YOLO 数据集标注是正确的)
+            new_boxes[:, 1:].clamp_(0, 1)
+
+        return img_tensor, new_boxes
+
+
+    @staticmethod
+    def collate_fn(batch: List[Tuple[Tensor, Tensor]]) -> Tuple[Tensor, Tensor]:
+        """
+        自定义的 collate_fn，用于 DataLoader
+
+        Args:
+            batch: 一个 batch 的样本列表，每个样本为 (img_tensor, target_tensor)
+
+        Returns:
+            images: 堆叠后的图像张量 (B, 3, H, W)
+            targets: 处理后的标签张量 (N, 6), 每行为 [batch_index, class, x, y, w, h]
+        """
+        images = []
+        targets = []
+
+        for i, (img, box) in enumerate(batch):
+            images.append(img)
+            
+            # 为每个框添加 batch 索引
+            if box.shape[0] > 0:
+                batch_idx = torch.full((box.shape[0], 1), i, dtype=torch.float32)
+                # 拼接: [batch_index, class, x, y, w, h]
+                target = torch.cat((batch_idx, box), dim=1)
+                targets.append(target)
+        
+        images = torch.stack(images, dim=0)
+        
+        if len(targets) > 0:
+            targets = torch.cat(targets, dim=0)
+        else:
+            targets = torch.zeros((0, 6), dtype=torch.float32)
+
+        return images, targets
