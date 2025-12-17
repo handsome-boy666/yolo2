@@ -22,8 +22,7 @@ class Trainer:
         optimizer: torch.optim.Optimizer,
         device: torch.device,
         anchors: List[Tuple[float, float]],
-        num_classes: int = 20,
-        epochs: int = 100,
+        num_classes: int,
         ckpt_dir: str = 'checkpoints',
         logger: logging.Logger = None,
         recorder: Optional[TrainingRecorder] = None,
@@ -37,13 +36,13 @@ class Trainer:
         self.device = device
         self.anchors = anchors
         self.num_classes = num_classes
-        self.epochs = epochs
         self.ckpt_dir = ckpt_dir
         self.logger = logger
         self.recorder = recorder
         self.save_interval = save_interval
         self.base_img_size = base_img_size
         self.config = config or {}
+        self.epochs = self.config.get('epochs')
         
         self.start_epoch = 1
         
@@ -109,24 +108,29 @@ class Trainer:
         
         # 实时计算 metrics (注意：这是在训练集上)
         # 从配置中获取阈值，如果不存在则使用默认值
-        conf_thresh = self.config.get('conf_thresh', 0.25)
-        iou_thresh = self.config.get('iou_thresh', 0.5)
-        nms_thresh = self.config.get('nms_thresh', 0.45)
+        conf_thresh = self.config.get('conf_thresh')
+        iou_thresh = self.config.get('iou_thresh')
+        nms_thresh = self.config.get('nms_thresh')
         
         metrics = DetectionMetrics(iou_thresh=iou_thresh, conf_thresh=conf_thresh, nms_thresh=nms_thresh)
         
-        iterator = tqdm(self.dataloader, desc=f"Epoch {epoch}", leave=False)
+        iterator = tqdm(self.dataloader, desc=f"Epoch {epoch}", leave=False)    # 进度条
         
         for batch_idx, (images, targets) in enumerate(iterator):
             # 调整图像尺寸
             if images.shape[2] != current_img_size:
-                images = F.interpolate(images, size=(current_img_size, current_img_size), mode='bilinear', align_corners=False)
+                images = F.interpolate(images, size=(current_img_size, current_img_size), mode='bilinear', align_corners=False) # 调整图像尺寸
                 
             images = images.to(self.device)
             targets = targets.to(self.device)
     
             preds = self.model(images)
-            loss = yolo_v2_loss(preds, targets, self.anchors, self.num_classes, S)
+            
+            # 获取 loss 权重参数
+            lambda_coord = self.config.get('lambda_coord')
+            lambda_noobj = self.config.get('lambda_noobj')
+            
+            loss = yolo_v2_loss(preds, targets, self.anchors, self.num_classes, S, lambda_coord=lambda_coord, lambda_noobj=lambda_noobj)
     
             self.optimizer.zero_grad()
             loss.backward()

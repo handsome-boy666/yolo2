@@ -2,7 +2,7 @@ import os
 import yaml
 import torch
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 
 from data.anchor import anchors_generate
 from data.dataset import MyDataset
@@ -30,40 +30,35 @@ def read_train_config(path: str) -> Dict[str, Any]:
     tcfg = cfg.get('train', {})
     return {
         'data_dir': tcfg.get('data_dir'),
-        'num_anchors': int(tcfg.get('num_anchors', 5)),
+        'num_anchors': int(tcfg.get('num_anchors')),
         'continue_model': tcfg.get('continue_model'),
         'batch_size': int(tcfg.get('batch_size')),
         'num_workers': int(tcfg.get('num_workers')),
-        'base_img_size': int(tcfg.get('base_img_size', 416)),
+        'base_img_size': int(tcfg.get('base_img_size')),
         'epochs': int(tcfg.get('epochs')),
-        'save_interval': int(tcfg.get('save_interval', 1)),
+        'save_interval': int(tcfg.get('save_interval')),
         'device': str(tcfg.get('device', 'cuda:0')),
-        'num_classes': int(tcfg.get('num_classes', 20)),  # 默认为 VOC 类别数
+        'num_classes': int(tcfg.get('num_classes')), 
         # 训练超参数
-        'learning_rate': float(tcfg.get('learning_rate', 0.001)),
-        'momentum': float(tcfg.get('momentum', 0.9)),
-        'weight_decay': float(tcfg.get('weight_decay', 0.0005)),
+        'learning_rate': float(tcfg.get('learning_rate')),
+        'momentum': float(tcfg.get('momentum')),
+        'weight_decay': float(tcfg.get('weight_decay')),
+        'lambda_coord': float(tcfg.get('lambda_coord')),
+        'lambda_noobj': float(tcfg.get('lambda_noobj')),
         # 阈值配置
-        'conf_thresh': float(tcfg.get('conf_thresh', 0.25)),
-        'nms_thresh': float(tcfg.get('nms_thresh', 0.45)),
-        'iou_thresh': float(tcfg.get('iou_thresh', 0.5)),
+        'conf_thresh': float(tcfg.get('conf_thresh')),
+        'nms_thresh': float(tcfg.get('nms_thresh')),
+        'iou_thresh': float(tcfg.get('iou_thresh')),
         # 输出
         'checkpoint_dir': tcfg.get('checkpoint_dir', 'checkpoints'),
         'log_dir': tcfg.get('log_dir', 'logs'),
     }
 
 
-def main():
-    # 1. 读取配置
-    try:
-        config = read_train_config('config.yaml')
-    except Exception as e:
-        print(f"读取配置失败: {e}")
-        return
-
-    # 2. 初始化环境和日志
-    device = torch.device(config['device'])
-    
+def setup_training_env(config: Dict[str, Any], device: torch.device) -> Tuple[str, Any, Any]:
+    """
+    初始化训练环境：创建目录、初始化日志和记录器
+    """
     # 生成本次运行的唯一 ID (时间戳)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     
@@ -77,7 +72,21 @@ def main():
     logger = setup_logger(run_log_dir)
     recorder = TrainingRecorder(run_log_dir)
     
-    logger.info(f"本次训练 Log 目录: {run_log_dir}, 使用设备：{device}")
+    logger.info(f"训练配置：Device: {device}  Data directory: {config['data_dir']}  Number of anchors: {config['num_anchors']}  Number of classes: {config['num_classes']}")
+    logger.info(f"超参数：Learning rate: {config['learning_rate']}  Momentum: {config['momentum']}  Weight decay: {config['weight_decay']}")
+    logger.info(f"阈值设置：Confidence threshold: {config['conf_thresh']}  NMS threshold: {config['nms_thresh']}  IoU threshold: {config['iou_thresh']}")
+    logger.info(f"数据加载：Batch size: {config['batch_size']}  Number of workers: {config['num_workers']}")
+    
+    return run_ckpt_dir, logger, recorder
+
+
+def main():
+    # 1. 读取配置
+    config = read_train_config('config.yaml')
+    
+    # 2. 初始化环境和日志
+    device = torch.device(config['device']) if torch.cuda.is_available() else torch.device('cpu')
+    run_ckpt_dir, logger, recorder = setup_training_env(config, device)
     
     # 3. 数据准备
     logger.info("正在初始化锚框...")
@@ -90,7 +99,7 @@ def main():
         batch_size=config['batch_size'],
         shuffle=True,
         num_workers=config['num_workers'],
-        collate_fn=dataset.collate_fn,
+        collate_fn=dataset.collate_fn,  # 自定义的 collate_fn 用于处理不同大小的输入
         pin_memory=True if device.type == 'cuda' else False
     )
     

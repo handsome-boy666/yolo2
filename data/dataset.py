@@ -29,6 +29,7 @@ class MyDataset(Dataset):
         print(f"初始化数据集: {data_dir}")
         self.data_dir = data_dir
         self.img_size = base_size
+        self.if_train = if_train
 
         if if_train:
             self.image_dir = os.path.join(data_dir, 'train/images')
@@ -65,9 +66,16 @@ class MyDataset(Dataset):
         """
         构建图像变换管线
         """
-        return transforms.Compose([
-            transforms.ToTensor(),
-        ])
+        if self.if_train:
+            # 训练时加入颜色抖动：亮度、对比度、饱和度、色调
+            return transforms.Compose([
+                transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.15, hue=0.1),
+                transforms.ToTensor(),
+            ])
+        else:
+            return transforms.Compose([
+                transforms.ToTensor(),
+            ])
 
     def __len__(self):
         """返回数据集样本数"""
@@ -110,10 +118,84 @@ class MyDataset(Dataset):
 
         boxes = torch.tensor(boxes, dtype=torch.float32) if boxes else torch.zeros((0, 5), dtype=torch.float32)
 
-        # 3. 图像预处理 (Letterbox)
+        # 3. 数据增强 (仅训练)
+        if self.if_train:
+            img, boxes = self._random_crop(img, boxes)
+
+        # 4. 图像预处理 (Letterbox)
         img_tensor, boxes = self._letterbox(img, boxes, self.img_size)
 
         return img_tensor, boxes
+
+    def _random_crop(self, img: Image.Image, boxes: Tensor) -> Tuple[Image.Image, Tensor]:
+        """
+        随机裁剪图像并调整标签
+        """
+        if random.random() < 0.5:
+            return img, boxes
+            
+        w, h = img.size
+        
+        # 随机裁剪比例 (0.4 ~ 1.0)
+        min_scale = 0.4
+        scale = random.uniform(min_scale, 1.0)
+        nw, nh = int(w * scale), int(h * scale)
+        
+        # 随机裁剪位置
+        dx = random.randint(0, w - nw)
+        dy = random.randint(0, h - nh)
+        
+        # 裁剪图像
+        img = img.crop((dx, dy, dx + nw, dy + nh))
+        
+        # 调整标签
+        if len(boxes) > 0:
+            # 将归一化坐标转换为绝对坐标
+            boxes[:, 1] *= w
+            boxes[:, 2] *= h
+            boxes[:, 3] *= w
+            boxes[:, 4] *= h
+            
+            # 平移坐标 (减去裁剪偏移)
+            boxes[:, 1] -= dx
+            boxes[:, 2] -= dy
+            
+            # 过滤：中心点必须在裁剪区域内
+            center_x = boxes[:, 1]
+            center_y = boxes[:, 2]
+            mask = (center_x >= 0) & (center_x < nw) & (center_y >= 0) & (center_y < nh)
+            boxes = boxes[mask]
+            
+            if len(boxes) > 0:
+                # 将坐标限制在裁剪图像范围内 (Clamp)
+                # 转换回 x1, y1, x2, y2
+                x1 = boxes[:, 1] - boxes[:, 3] / 2
+                y1 = boxes[:, 2] - boxes[:, 4] / 2
+                x2 = boxes[:, 1] + boxes[:, 3] / 2
+                y2 = boxes[:, 2] + boxes[:, 4] / 2
+                
+                x1.clamp_(0, nw)
+                y1.clamp_(0, nh)
+                x2.clamp_(0, nw)
+                y2.clamp_(0, nh)
+                
+                # 转换回 cx, cy, w, h
+                boxes[:, 1] = (x1 + x2) / 2
+                boxes[:, 2] = (y1 + y2) / 2
+                boxes[:, 3] = x2 - x1
+                boxes[:, 4] = y2 - y1
+                
+                # 过滤掉过小的框 (例如长或宽小于 5 像素)
+                mask = (boxes[:, 3] > 5) & (boxes[:, 4] > 5)
+                boxes = boxes[mask]
+                
+                # 重新归一化到新尺寸
+                boxes[:, 1] /= nw
+                boxes[:, 2] /= nh
+                boxes[:, 3] /= nw
+                boxes[:, 4] /= nh
+                
+        return img, boxes
 
     def _letterbox(self, img: Image.Image, boxes: Tensor, new_shape: int) -> Tuple[Tensor, Tensor]:
         """

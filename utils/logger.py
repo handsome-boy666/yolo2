@@ -20,7 +20,7 @@ def setup_logger(log_dir: str, name: str = "train") -> logging.Logger:
     logger.setLevel(logging.INFO)
     
     # 避免重复添加 handler
-    if not logger.handlers:
+    if not logger.handlers: # 防止重复添加 handler
         formatter = logging.Formatter(
             fmt="%(asctime)s [%(levelname)s] %(message)s", 
             datefmt="%Y-%m-%d %H:%M:%S"
