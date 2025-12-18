@@ -40,7 +40,7 @@ class YOLOv2Loss(nn.Module):
         area2 = boxes2[:, 2] * boxes2[:, 3]
         union_area = area1.unsqueeze(1) + area2.unsqueeze(0) - inter_area
 
-        return inter_area / (union_area + 1e-6)
+        return inter_area / (union_area + 1e-6) # 计算每个 GT 框与每个 Anchor 的 IoU
 
     def build_targets(self, pred_shape, target, anchors, device):
         """构建训练目标"""
@@ -57,7 +57,7 @@ class YOLOv2Loss(nn.Module):
         
         for b in range(B):
             # 获取当前 batch 的 GT (过滤掉 padding)
-            batch_target = target[target[:, 0] == b]
+            batch_target = target[target[:, 0] == b]    # 这是当前 batch 的 GT 框
             if len(batch_target) == 0:
                 continue
 
@@ -83,7 +83,7 @@ class YOLOv2Loss(nn.Module):
             anchor_box_shifted[:, 3] = anchors_scaled[:, 1]
             
             iou = self.compute_iou(gt_box_shifted, anchor_box_shifted)
-            best_anchor_idx = torch.argmax(iou, dim=1)
+            best_anchor_idx = torch.argmax(iou, dim=1)  # 选择每个 GT 框的最佳 Anchor
 
             # 设置 Targets
             for i, anchor_idx in enumerate(best_anchor_idx):
@@ -96,7 +96,7 @@ class YOLOv2Loss(nn.Module):
                 tx_ty_target[b, anchor_idx, y, x, 0] = gx[i] - x.float()
                 tx_ty_target[b, anchor_idx, y, x, 1] = gy[i] - y.float()
                 
-                # 尺寸缩放 Target (相对于 Anchor)
+                # 尺寸缩放 Target (相对于 Anchor)，使用对数变换，因此不需要开根号计算损失
                 tw_th_target[b, anchor_idx, y, x, 0] = torch.log(gw[i] / anchors_scaled[anchor_idx, 0] + 1e-16)
                 tw_th_target[b, anchor_idx, y, x, 1] = torch.log(gh[i] / anchors_scaled[anchor_idx, 1] + 1e-16)
                 
@@ -137,7 +137,7 @@ class YOLOv2Loss(nn.Module):
         # Coordinate Loss (MSE)
         loss_x = F.mse_loss(pred_txty[..., 0][pos_mask], tx_ty_target[..., 0][pos_mask], reduction='sum')
         loss_y = F.mse_loss(pred_txty[..., 1][pos_mask], tx_ty_target[..., 1][pos_mask], reduction='sum')
-        loss_w = F.mse_loss(pred_twth[..., 0][pos_mask], tw_th_target[..., 0][pos_mask], reduction='sum')
+        loss_w = F.mse_loss(pred_twth[..., 0][pos_mask], tw_th_target[..., 0][pos_mask], reduction='sum')   # 对数偏移
         loss_h = F.mse_loss(pred_twth[..., 1][pos_mask], tw_th_target[..., 1][pos_mask], reduction='sum')
         loss_coord = self.lambda_coord * (loss_x + loss_y + loss_w + loss_h)
 

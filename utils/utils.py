@@ -93,20 +93,11 @@ def decode_yolo_output(output: torch.Tensor, anchors: List[Tuple[float, float]],
     nW = output.size(3)
     stride = img_size[0] / nH
     
-    # 检查 anchor 是否为归一化值 (假设如果所有 anchor 宽高都小于 1，则为归一化值)
-    is_normalized = all(a[0] < 1.0 and a[1] < 1.0 for a in anchors)
-    
-    # 归一化锚框到特征图尺度
-    if is_normalized:
-        # 如果是归一化值 (0-1)，先乘以 img_size 转为像素，再除以 stride
-        # 或者直接乘以特征图尺寸: a_w * nW
-        scaled_anchors = [(a_w * nW, a_h * nH) for a_w, a_h in anchors]
-    else:
-        # 如果已经是像素值，直接除以 stride
-        scaled_anchors = [(a_w / stride, a_h / stride) for a_w, a_h in anchors]
+    # 归一化锚框到特征图尺度，直接乘以特征图尺寸: a_w * nW
+    scaled_anchors = [(a_w * nW, a_h * nH) for a_w, a_h in anchors]
 
     num_anchors = len(anchors)
-    bbox_attrs = 5 + num_classes
+    bbox_attrs = 5 + num_classes    # 5个属性 + 类别数量
     
     # 重塑张量
     prediction = output.view(nB, num_anchors, bbox_attrs, nH, nW).permute(0, 1, 3, 4, 2).contiguous()

@@ -134,7 +134,7 @@ class Trainer:
     
             self.optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)  # 梯度裁剪，防止梯度爆炸
             self.optimizer.step()
     
             # 监控最大置信度

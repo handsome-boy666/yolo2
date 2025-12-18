@@ -137,3 +137,121 @@ L &= \lambda_{\text{coord}} \sum_{i \in \mathcal{P}}
 - J. Redmon, A. Farhadi. YOLO9000: Better, Faster, Stronger. CVPR 2017.
 - Darknet 官方实现与配置文件。
 
+---
+
+# 工程实现与使用指南
+
+本工程完整复现了 YOLOv2 算法，基于 PyTorch 框架。以下是针对本工程代码的详细解读与使用教程。
+
+## 1. 工程目录结构
+
+```text
+e:\my_workspace\yolo2\
+├── config.yaml          # [核心配置] 训练超参数、路径、阈值、设备等统一配置文件
+├── train.py             # [训练入口] 训练启动脚本，负责初始化和启动 Trainer
+├── README.md            # [项目文档] 项目说明与原理介绍
+├── visualize.py         # [可视化] 预测结果可视化脚本
+├── data/                # [数据处理模块]
+│   ├── anchor.py        # [Anchor 生成] 使用 K-Means 聚类生成数据集专属 Anchor
+│   └── dataset.py       # [数据集] 图像加载、Letterbox 预处理、数据增强(ColorJitter/RandomCrop)
+├── model/               # [模型核心模块]
+│   ├── darknet.py       # [骨干网络] Darknet-19 网络实现
+│   ├── yolov2.py        # [整体架构] YOLOv2 类，包含 Passthrough 层与检测头
+│   └── loss.py          # [损失函数] 核心算法实现，包含坐标、置信度、类别损失计算
+└── utils/               # [工具模块]
+    ├── trainer.py       # [训练器] 封装训练循环、Checkpoint 管理、多尺度训练逻辑
+    ├── logger.py        # [日志] 训练日志记录器
+    └── utils.py         # [通用工具] IoU 计算、NMS、mAP 指标评估
+```
+
+## 2. 核心模块深度解析
+
+### 2.1 数据准备 (`data/`)
+
+*   **Anchor 生成 (`data/anchor.py`)**：
+    *   YOLOv2 需要预先定义的 Anchor Box。本工程提供了 `kmeans` 算法，对训练集的所有 Ground Truth 框进行聚类。
+    *   **原理**：使用 `1 - IoU` 作为距离度量，而非欧氏距离，确保 Anchor 形态更贴合真实物体。
+    *   **产出**：生成 `yolov2_anchors.json`，训练时会自动加载。
+
+*   **数据集处理 (`data/dataset.py`)**：
+    *   **MyDataset 类**：负责读取图片和标签。
+    *   **Letterbox**：为了适应正方形输入（如 416x416）且不改变物体长宽比，代码实现了 `_letterbox` 方法，将图片缩放并填充灰色边缘，同时自动调整 Label 坐标。
+    *   **数据增强**：
+        *   **颜色抖动**：随机调整亮度、对比度、饱和度、色调。
+        *   **随机裁剪**：在训练时随机裁剪图片，并同步修正 Label 坐标（平移、Clamp、过滤）。
+
+### 2.2 模型架构 (`model/`)
+
+*   **Darknet-19 (`model/darknet.py`)**：
+    *   实现标准的 Darknet-19 骨干，大量使用 `3x3` 卷积配合 `1x1` 瓶颈层，所有层后接 BN 和 Leaky ReLU。
+    *   去掉了分类用的全连接层。
+
+*   **YOLOv2 (`model/yolov2.py`)**：
+    *   **ReorgLayer (Passthrough)**：实现特征重排，将浅层特征（如 26x26x512）拆分为（13x13x2048），以便与深层特征融合。
+    *   **Forward 流程**：Backbone -> Passthrough 融合 -> 检测头卷积 -> 输出 `[B, A*(5+C), H, W]`。
+
+*   **损失函数 (`model/loss.py`)**：
+    *   **Target 构建**：`build_targets` 方法将 GT 框匹配到最佳 Anchor 和网格位置。
+    *   **Loss 计算**：
+        *   **Coord Loss**：MSE Loss，仅计算正样本，权重 `lambda_coord=5.0`。
+        *   **Conf Loss**：
+            *   正样本：趋向 1。
+            *   负样本：趋向 0，权重 `lambda_noobj=0.5`。
+        *   **Class Loss**：CrossEntropy Loss，仅计算正样本。
+
+### 2.3 训练逻辑 (`utils/trainer.py`)
+
+*   **Trainer 类**：管理整个训练生命周期。
+*   **多尺度训练**：
+    *   为了提升模型对不同分辨率的鲁棒性，Trainer 在每个 Epoch 开始时会随机选择一个输入尺寸（320 到 608 之间 32 的倍数）。
+    *   代码：`current_img_size = random.choice(self.multi_scale_sizes)`。
+*   **Checkpoint**：每隔 `save_interval` 个 Epoch 自动保存模型权重和优化器状态。
+
+## 3. 快速上手指南
+
+### 步骤 1：环境准备
+确保安装 Python 3.8+ 及 PyTorch。
+```bash
+pip install torch torchvision opencv-python tqdm pyyaml
+```
+
+### 步骤 2：数据准备
+将数据集按以下结构整理：
+```
+dataset/YourData/
+├── train/
+│   ├── images/  # .jpg / .png
+│   └── labels/  # .txt (YOLO格式: class x y w h)
+└── test/
+    ├── images/
+    └── labels/
+```
+
+### 步骤 3：配置参数
+修改 `config.yaml` 文件：
+```yaml
+data_dir: "dataset/YourData"  # 指向你的数据集路径
+num_classes: 20               # 修改为你的类别数
+batch_size: 16                # 根据显存调整
+epochs: 100
+```
+
+### 步骤 4：生成 Anchors
+运行脚本生成适合你数据集的 Anchors：
+```bash
+python data/anchor.py
+```
+*注：`train.py` 也会在启动时尝试自动生成。*
+
+### 步骤 5：开始训练
+```bash
+python train.py
+```
+训练过程中，可以在 `logs/` 目录下查看训练日志和 Checkpoints。
+
+### 步骤 6：推理与可视化
+使用 `visualize.py` 查看模型在测试集上的表现：
+```bash
+python visualize.py
+```
+该脚本会加载最新的模型，在测试集图片上绘制检测框并保存结果。
