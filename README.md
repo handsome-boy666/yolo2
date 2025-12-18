@@ -18,7 +18,7 @@
 *  $b_h = p_h \cdot e^{t_h}$ （ $p_h$ 为锚框原始高度， $t_h$ 为模型预测的高度缩放因子）
 
 这种设计将**直接回归框尺寸**转化为**回归锚框的相对偏移**，大幅降低了回归难度，提升了框预测的稳定性。因此，输入一张图片，模型的输出为 $S \times S \times (k \times 5 + C)$，其中 $S$ 为特征图尺寸， $k$ 为每个网格预设的锚框数， $C$ 为类别数。
-#### 3、维度聚类（Dimension Clusters）：找锚框的方法
+#### 改进3：维度聚类（Dimension Clusters）：找锚框的方法
 传统锚框尺寸依赖人工经验设计（如 Faster R-CNN），YOLOv2 提出**基于 IoU 的 K-means 聚类**自动生成适配数据集的锚框：
 * 从训练集中提取所有框的宽高（归一化到特征图尺寸）
 * 使用k-means聚类方法选择k个锚框，兼顾召回率和模型轻量。选k=5
@@ -29,15 +29,69 @@
 这种方法通过自动学习数据分布，无需手动设计，且能有效处理不同物体尺寸的问题。
 
 ### 1.2 网络架构
-相较于V1，V2改GooleNet为Darknet-19，能够提取更丰富的特征，从而提升检测精度。删除了全连接层，仅保留卷积层。
-#### 细粒度特征融合
+#### 改进4：使用Darknet-19（全卷积网络FCN）
+相较于V1，V2改GooleNet为Darknet-19，能够提取更丰富的特征，从而提升检测精度。移除了所有全连接层，仅保留卷积层。
+#### 改进5：批量归一化（Batch Normalization）
+在 Darknet-19 的每一层卷积后都添加了BN层，无需 Dropout 即可有效防止过拟合（直接移除dropout）
+#### 改进6：细粒度特征融合（Fine-Grained Features）
 将Darknet-19中第13层卷积输出（细粒度特征）与第19层卷积输出（粗粒度特征）通过 Passthrough 层融合，保留多尺度信息。
+* **passthrough层**：将26×26×512的特征图按“隔点采样”方式重塑为13×13×2048（每个2×2区域压缩为1个像素，通道数扩大4倍），再与13×13×1024的特征图拼接，得到13×13×3072的融合特征。
 
 <p align="center">
   <img src="images/image1.png" alt="image1" width="600"/>
 </p>
 
 由于只有卷积层，可输入不同尺寸图片（320–608，步长 32），网格数 $ S=\frac{图片尺寸}{32} $
+
+### 1.3 损失函数
+
+YOLOv2 损失函数和YOLOv1类似,但略有不同
+$$
+Loss = \lambda_{coord} \cdot Loss_{coord} + Loss_{obj} + \lambda_{noobj} \cdot Loss_{noobj} + Loss_{class}
+$$
+
+**一、坐标回归损失**：仅正样本参与，宽高对数变换平衡大小目标：
+
+$$
+Loss_{coord} = \sum \mathbb{1}^{obj} \left[( \sigma {(t_x)}-\hat{t}_x)^2 + ( \sigma {(t_y)}-\hat{t}_y)^2 + (t_w-\hat{t}_w)^2 + (t_h-\hat{t}_h)^2\right]
+$$
+
+$\hat{t}_x/\hat{t}_y$ 为 GT 网格内偏移，$\hat{t}_w/\hat{t}_h$ 为 GT 宽高相对锚框的对数缩放。
+
+**二、置信度损失**：有目标置信度预测（MSE）和无目标置信度预测（MSE）：
+
+- 有目标：$$Loss_{obj} = \sum \mathbb{1}^{obj} (conf_{pred} - IOU(pred, gt))^2$$
+- 无目标：$$Loss_{noobj} = \sum \mathbb{1}^{noobj} (conf_{pred} - 0)^2$$
+
+**三、类别损失**：仅正样本参与，单/多标签分别用交叉熵/BCE：
+
+$$
+Loss_{class} = \sum \mathbb{1}^{obj} \sum_c \left[\hat{P}_c \log(P_c) + (1-\hat{P}_c) \log(1-P_c)\right]
+$$
+
+## 核心设计逻辑
+- 坐标损失加权（λ=5）：强化定位精度；
+- 无目标置信度降权（λ=0.5）：缓解正负样本不均衡；
+- 宽高对数变换：平衡大小目标损失贡献。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ## 2 本项目介绍
 本项目使用 PyTorch 实现，适配二维码数据集（但类别）和植物大战僵尸数据集（多类别）进行训练。
 
