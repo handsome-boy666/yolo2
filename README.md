@@ -46,6 +46,7 @@
 ### 1.3 损失函数
 
 YOLOv2 损失函数和YOLOv1类似,但略有不同
+
 $$
 Loss = \lambda_{coord} \cdot Loss_{coord} + Loss_{obj} + \lambda_{noobj} \cdot Loss_{noobj} + Loss_{class}
 $$
@@ -60,8 +61,13 @@ $\hat{t}_x/\hat{t}_y$ 为 GT 网格内偏移，$\hat{t}_w/\hat{t}_h$ 为 GT 宽�
 
 **二、置信度损失**：有目标置信度预测（MSE）和无目标置信度预测（MSE）：
 
-- 有目标：$$Loss_{obj} = \sum \mathbb{1}^{obj} (conf_{pred} - IOU(pred, gt))^2$$
-- 无目标：$$Loss_{noobj} = \sum \mathbb{1}^{noobj} (conf_{pred} - 0)^2$$
+- 有目标：
+
+$$Loss_{obj} = \sum \mathbb{1}^{obj} (conf_{pred} - IOU(pred, gt))^2$$
+
+- 无目标：
+
+$$Loss_{noobj} = \sum \mathbb{1}^{noobj} (conf_{pred} - 0)^2$$
 
 **三、类别损失**：仅正样本参与，单/多标签分别用交叉熵/BCE：
 
