@@ -24,7 +24,7 @@
 * 使用k-means聚类方法选择k个锚框，兼顾召回率和模型轻量。选k=5
 * 欧式距离改为 $1-IOU$ （防止大框影响过大）
 <p align="center">
-  <img src="images/image2.png" alt="image2" width="300"/>
+  <img src="images/image1.png" alt="image2" width="300"/>
 </p>
 这种方法通过自动学习数据分布，无需手动设计，且能有效处理不同物体尺寸的问题。
 
@@ -38,7 +38,7 @@
 * **passthrough层**：将26×26×512的特征图按“隔点采样”方式重塑为13×13×2048（每个2×2区域压缩为1个像素，通道数扩大4倍），再与13×13×1024的特征图拼接，得到13×13×3072的融合特征。
 
 <p align="center">
-  <img src="images/image1.png" alt="image1" width="600"/>
+  <img src="images/image2.png" alt="image1" width="600"/>
 </p>
 
 由于只有卷积层，可输入不同尺寸图片（320–608，步长 32），网格数 $ S=\frac{图片尺寸}{32} $
@@ -51,7 +51,7 @@ $$
 Loss = \lambda_{coord} \cdot Loss_{coord} + Loss_{obj} + \lambda_{noobj} \cdot Loss_{noobj} + Loss_{class}
 $$
 
-**一、坐标回归损失**：仅正样本参与，宽高对数变换平衡大小目标：
+**一、坐标回归损失**：仅正样本参与，宽高对数变换平衡大小目标（权重5.0，强化定位精度）：
 
 $$
 Loss_{coord} = \sum \mathbb{1}^{obj} \left[( \sigma {(t_x)}-\hat{t}_x)^2 + ( \sigma {(t_y)}-\hat{t}_y)^2 + (t_w-\hat{t}_w)^2 + (t_h-\hat{t}_h)^2\right]
@@ -59,13 +59,15 @@ $$
 
 $\hat{t}_x/\hat{t}_y$ 为 GT 网格内偏移，$\hat{t}_w/\hat{t}_h$ 为 GT 宽高相对锚框的对数缩放。
 
+Q：为什么要对数变换？A：平衡大小目标损失贡献
+
 **二、置信度损失**：有目标置信度预测（MSE）和无目标置信度预测（MSE）：
 
 - 有目标：
 
 $$Loss_{obj} = \sum \mathbb{1}^{obj} (conf_{pred} - IOU(pred, gt))^2$$
 
-- 无目标：
+- 无目标（权重0.5，缓解正负样本不均衡）：
 
 $$Loss_{noobj} = \sum \mathbb{1}^{noobj} (conf_{pred} - 0)^2$$
 
@@ -75,15 +77,41 @@ $$
 Loss_{class} = \sum \mathbb{1}^{obj} \sum_c \left[\hat{P}_c \log(P_c) + (1-\hat{P}_c) \log(1-P_c)\right]
 $$
 
-## 核心设计逻辑
-- 坐标损失加权（λ=5）：强化定位精度；
-- 无目标置信度降权（λ=0.5）：缓解正负样本不均衡；
-- 宽高对数变换：平衡大小目标损失贡献。
+### 1.4 训练配置
 
+- **参数配置**：ImageNet 1000类分类数据集上训练网络160个epoch，使用随机梯度下降，起始学习率为0.1，多项式率衰减为4，权重衰减为0.0005，动量为0.9
+- **数据增强**：包括随机裁剪、旋转、色调、饱和度和曝光偏移
+- 在224 × 224的图像上进行初始训练后，将网络调整到更大的尺寸448。使用上述参数进行训练，但只训练10个epoch，并以10−3的学习率开始。
+- 训练网络160个epoch，初始学习率为10−3，在60和90 epoch时除以10。
 
+#### 改进7：多尺度训练（Multi-Scale Training）
+为让模型适应不同尺寸的目标，采用动态调整输入分辨率的训练策略：每隔10个batch，随机选择输入图像的分辨率（从320×320到608×608，步长为32，与网络下采样倍数一致）。
 
+#### 改进8：高分辨率分类器（High Resolution Classifier）
+先用224×224分辨率在ImageNet上预训练Darknet-19，完成分类任务收敛。再在高分辨率上训练10个epoch微调。
 
+#### 改进9：联合训练（Joint Training）：在后续的版本验证没有用
+成本高、提升有限
+<p align="center">
+  <img src="images/image3.png" alt="image1" width="300"/>
+</p>
 
+- **损失函数适配**
+    - 当输入图像来自检测数据集时，计算完整损失（分类损失+定位损失+置信度损失）。
+    - 当输入图像来自分类数据集时，仅计算分类损失，定位损失和置信度损失置零。
+- **数据融合**：使用WordTree（词树），将检测数据集（如COCO，80类，含边界框标注）与分类数据集（如ImageNet，1000类，仅含类别标注）混合训练。
+    - 如标签为‘动物’，反向传播只从动物这里传。如果标签为‘金毛’，反向传播从‘金毛’-‘狗’-‘动物’传播
+
+### 1.5 总结
+
+- YOLO2在“精度-速度”权衡上全面超越初代YOLO，同时优于Faster R-CNN和SSD等主流模型。
+- 联合训练的YOLO9000在ImageNet分类任务上准确率达19.7%，在COCO检测任务上mAP达74.9%，实现“多类别识别+实时检测”的突破。
+
+**局限性**
+
+- 对密集小目标（如人群、密集车辆）的检测仍有漏检风险，因每个网格仅对应固定数量锚框。
+- 联合训练的类别层级树构建依赖人工，对无明确层级的类别适配性差。
+- 识别服装、装备能力差
 
 
 
@@ -102,132 +130,7 @@ $$
 本项目使用 PyTorch 实现，适配二维码数据集（但类别）和植物大战僵尸数据集（多类别）进行训练。
 
 
-## 算法概述
-- 单阶段、端到端目标检测：将检测视为密集预测任务，在单个前向传播中同时输出位置、置信度与类别。
-- Anchor 机制与直接位置预测：使用 K-Means（IoU 距离）聚类得到先验框（anchors），网络预测相对 anchor 的偏移；对中心坐标采用 Sigmoid 使其落在对应栅格内，训练更稳定。
-- Darknet-19 骨干网络：轻量高效的 19 层卷积骨干，配合批归一化与 Leaky ReLU，在速度与准确率间取得良好折中。
-- Passthrough（reorg）特征融合：将高分辨率特征重排后与低分辨率检测特征拼接，提升小目标性能。
-- 多尺度训练：每隔若干迭代随机切换输入尺寸（320–608，步长 32），提升尺度泛化能力。
-- 相比 YOLOv1 的主要优化：
-  - 引入 anchors 与直接坐标预测（YOLOv1 直接回归绝对坐标，稳定性较差）。
-  - 全面使用 BatchNorm，显著降低过拟合并提升收敛。
-  - 高分辨率分类器预训练（先将分类器提升至 448，再迁移到检测）。
-  - 特征融合与更优的骨干网络（Darknet-19），速度更快、精度更高。
 
-## 技术细节
-### 预测参数与核心公式
-对每个栅格上的每个 anchor，网络输出：
-\[
-t_x,\, t_y,\, t_w,\, t_h,\, t_o,\; \{a_k\}_{k=1}^{C}
-\]
-其中 \(t_x, t_y\) 为中心偏移，\(t_w, t_h\) 为尺度偏移，\(t_o\) 为对象置信度的 logit，\(\{a_k\}\) 为各类别的 logit（C 为类别数）。将它们映射为实际量的公式如下：
-
-- 边界框中心坐标（相对所在栅格的左上角）：
-\[
-b_x = \sigma(t_x) + c_x,\quad
-b_y = \sigma(t_y) + c_y
-\]
-其中 \(\sigma(\cdot)\) 为 Sigmoid，\(c_x, c_y\) 为该栅格在特征图上的整数坐标。
-
-- 边界框尺寸（相对 anchor 尺寸的指数缩放）：
-\[
-b_w = p_w \cdot e^{t_w},\quad
-b_h = p_h \cdot e^{t_h}
-\]
-其中 \(p_w, p_h\) 为该 anchor 的先验宽高。
-
-- 对象置信度（objectness）：
-\[
-p_{\text{obj}} = \sigma(t_o)
-\]
-在推理时常将“置信度”写作
-\[
-\text{conf} = p_{\text{obj}} \cdot \operatorname{IoU}(b, g)
-\]
-其中 \(g\) 为匹配的 GT 框；训练中 Darknet 实现通常以 IoU 或 1/0 目标为依据对 \(\text{conf}\) 进行回归与抑制无目标样本。
-
-- 类别概率（Softmax）：
-\[
-p(k \mid \text{obj}) = \frac{e^{a_k}}{\sum_{j=1}^{C} e^{a_j}}
-\]
-最终每个类别的检测分数：
-\[
-s_k = \text{conf} \cdot p(k \mid \text{obj})
-\]
-后处理采用 NMS 抑制重叠框。
-
-## 网络架构
-### Darknet-19 骨干网络
-- 设计思想：交替使用 \(3\times 3\) 与 \(1\times 1\) 卷积构建瓶颈结构，所有卷积层后接 BatchNorm 与 Leaky ReLU（负斜率约 0.1），下采样通过 \(2\times 2\) 最大池化。
-- 典型结构（输入 \(416\times416\)）：
-  - conv \(3\times3\), 32 → maxpool
-  - conv \(3\times3\), 64 → maxpool
-  - conv \(3\times3\), 128 → conv \(1\times1\), 64 → conv \(3\times3\), 128 → maxpool
-  - conv \(3\times3\), 256 → conv \(1\times1\), 128 → conv \(3\times3\), 256 → maxpool
-  - conv \(3\times3\), 512 → conv \(1\times1\), 256 → conv \(3\times3\), 512 → conv \(1\times1\), 256 → conv \(3\times3\), 512 → maxpool
-  - conv \(3\times3\), 1024 → conv \(1\times1\), 512 → conv \(3\times3\), 1024 → conv \(1\times1\), 512 → conv \(3\times3\), 1024
-- 分类任务末端接全局平均池化与全连接 Softmax；检测任务去掉分类头，接检测头与特征融合。
-
-### 检测头与输出
-- 在骨干末端追加若干卷积（如 \(3\times 3\) + \(1\times 1\)），最终输出通道数为 \(A \times (5 + C)\)，其中 A 为 anchor 数，5 表示 \((t_x,t_y,t_w,t_h,t_o)\)。
-- 输出特征图尺寸约为 \(13\times 13\)（当输入为 \(416\times 416\)，下采样 32 倍）。
-
-### 特征融合（Passthrough / reorg）
-- 选择一层较高分辨率的特征图（例如 \(26\times26\times512\)），使用 reorg 操作将其按 \(2\times2\) 邻域重排为 \(13\times13\times2048\)。
-- 与主干末端的 \(13\times13\times1024\) 检测特征在通道维拼接，得到 \(13\times13\times(1024+2048)\)。
-- 再经 \(1\times1\) 卷积降维与 \(3\times3\) 卷积细化，最后输出检测张量。该融合显著提升小目标检测能力。
-
-## 训练细节
-### 输入尺寸
-- 检测训练常用 \(416\times416\)；多尺度训练每隔若干迭代随机选择 \(\{320, 352, \dots, 608\}\)。
-- 分类预训练先将输入提升至 \(448\times448\) 以获得更强的高分辨率特征。
-
-### 数据增强
-- 随机尺度与平移抖动（jitter），随机裁剪，水平翻转。
-- 颜色扰动：HSV 颜色空间中对色相/饱和度/亮度进行随机扰动（常见幅度在 \(\pm 0.2\sim0.4\) 区间）。
-- 随机填充与保持纵横比（letterbox）以适应不同输入尺寸。
-
-### 损失函数
-设正样本集合为 \(\mathcal{P}\)，\(\operatorname{IoU}_i\) 为第 \(i\) 个预测框与其 GT 的 IoU，\(\mathbf{p}_i\) 为类别概率，\(\mathbf{y}_i\) 为 one-hot 标签，整体损失：
-\[
-\begin{aligned}
-L &= \lambda_{\text{coord}} \sum_{i \in \mathcal{P}}
-\Big[(x_i - \hat{x}_i)^2 + (y_i - \hat{y}_i)^2 + (w_i - \hat{w}_i)^2 + (h_i - \hat{h}_i)^2\Big] \\
-&\quad + \sum_i \Big[ \mathbf{1}_i^{\text{obj}} \big(\text{conf}_i - \operatorname{IoU}_i\big)^2
- + \lambda_{\text{noobj}} \mathbf{1}_i^{\text{noobj}} \big(\text{conf}_i - 0\big)^2 \Big] \\
-&\quad + \sum_{i \in \mathcal{P}} \operatorname{CE}\big(\mathbf{p}_i, \mathbf{y}_i\big)
-\end{aligned}
-\]
-- 常用权重：\(\lambda_{\text{coord}}=5\)、\(\lambda_{\text{noobj}}=0.5\)；正负样本的对象置信度分别以 IoU/0 为目标。
-- 忽略阈值（ignore-thresh）：对与任一 GT IoU 较高的负样本（如 \(>0.6\)），在无目标项中不计入损失，缓解过抑制。
-
-### 训练超参数（参考官方 Darknet 配置）
-- 优化器：SGD，动量 0.9，权重衰减 0.0005。
-- 学习率：初始 \(1\times10^{-3}\)（带若干百迭代的 warmup），分段衰减（如在 40k、45k 迭代处乘以 0.1）。
-- 批大小与细分：batch 64，subdivisions 8 或 16（取决于显存）。
-- Anchor 选择：对训练集 GT 尺寸做 K-Means（IoU 距离）得到 A 个 priors（如 A=5）。
-
-## 性能指标
-以下数据摘自“YOLO9000: Better, Faster, Stronger”（不同实现与硬件可能略有差异）：
-
-### Pascal VOC 2007 测试集（训练于 07+12）
-- YOLOv2 416：mAP ≈ 76.8，速度 ≈ 67 FPS（Titan X）
-- YOLOv2 544：mAP ≈ 78.6，速度 ≈ 40 FPS
-- YOLOv2 288：mAP ≈ 69.9，速度 ≈ 90+ FPS
-
-### COCO test-dev
-- AP@[.5:.95] ≈ 21–22
-- AP50 ≈ 44
-- 速度：以 416 输入在高端 GPU 上通常 40–60 FPS
-
-### 与其他检测算法的对比（代表性结果）
-- Faster R-CNN（ResNet-101，VOC07）：mAP ≈ 76.3，速度 ≈ 5 FPS
-- SSD512（VOC07）：mAP ≈ 76–77，速度 ≈ 19 FPS
-- 综合来看，YOLOv2 以显著更高的速度提供与两阶段方法相近的精度。
-
-## 参考
-- J. Redmon, A. Farhadi. YOLO9000: Better, Faster, Stronger. CVPR 2017.
-- Darknet 官方实现与配置文件。
 
 ---
 
