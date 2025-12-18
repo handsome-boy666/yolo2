@@ -134,49 +134,6 @@ def decode_yolo_output(output: torch.Tensor, anchors: List[Tuple[float, float]],
                         pred_cls.view(nB, -1, num_classes)), -1)
     return output
 
-def plot_boxes(img: np.ndarray, boxes: np.ndarray, class_names: Optional[List[str]] = None, color: Optional[Tuple[int, int, int]] = None) -> np.ndarray:
-    """
-    在图像上绘制边界框。
-    
-    Args:
-        img: 图像数组 (H, W, 3) BGR
-        boxes: 边界框数组 (N, 7) [x1, y1, x2, y2, obj_conf, cls_conf, cls_pred]
-        class_names: 类别名称列表
-        color: 边框颜色 (B, G, R)。如果为 None，则根据类别自动生成不同颜色。
-    """
-    for i in range(len(boxes)):
-        box = boxes[i]
-        x1, y1 = int(box[0]), int(box[1])
-        x2, y2 = int(box[2]), int(box[3])
-        
-        cls_id = int(box[6])
-        cls_conf = box[5]
-        
-        if color is not None:
-            c = color
-        else:
-            # 根据类别 ID 生成固定颜色 (使用 HSV 空间生成不同颜色)
-            # Golden ratio conjugate to generate distinct colors
-            h = (cls_id * 0.618033988749895) % 1
-            # H: 0-179, S: 200-255, V: 200-255 (保持高饱和度和亮度)
-            h_deg = int(h * 180)
-            # 使用 numpy 创建 1x1 像素的 HSV 图像并转换为 BGR
-            mat = np.uint8([[[h_deg, 255, 255]]])
-            bgr = cv2.cvtColor(mat, cv2.COLOR_HSV2BGR)[0][0]
-            c = (int(bgr[0]), int(bgr[1]), int(bgr[2]))
-            
-        cv2.rectangle(img, (x1, y1), (x2, y2), c, 2)
-        
-        if class_names:
-            label = f"{class_names[cls_id]} {cls_conf:.2f}"
-            # 获取文本大小
-            (w, h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            # 绘制文字背景框
-            cv2.rectangle(img, (x1, y1 - h - 5), (x1 + w, y1), c, -1)
-            # 绘制文字 (使用黑色以保持对比度)
-            cv2.putText(img, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-            
-    return img
 
 class DetectionMetrics:
     """
@@ -194,9 +151,9 @@ class DetectionMetrics:
         self.iou_thresh = iou_thresh
         self.conf_thresh = conf_thresh
         self.nms_thresh = nms_thresh
-        # 统计信息: [(TP, conf, pred_cls, target_cls), ...]
+        # 统计信息: [(TP, conf, pred_cls, iou), ...]
         self.stats = [] 
-        self.total_targets = 0
+        self.gt_classes = [] # 记录所有 GT 的类别
         
     def update(self, preds: torch.Tensor, targets: torch.Tensor, anchors: List[Tuple[float, float]], num_classes: int, img_size: Tuple[int, int]) -> None:
         """
@@ -216,7 +173,9 @@ class DetectionMetrics:
             target_mask = targets[:, 0] == batch_i
             batch_targets = targets[target_mask] # (N_tgt, 6)
             
-            self.total_targets += len(batch_targets)
+            # 记录 GT 类别
+            if len(batch_targets) > 0:
+                self.gt_classes.extend(batch_targets[:, 1].cpu().numpy().tolist())
             
             if detections is None:
                 continue
@@ -240,7 +199,8 @@ class DetectionMetrics:
             # 匹配逻辑
             if len(gt_xyxy) == 0:
                 for det in detections:
-                    self.stats.append((0, det[4], det[6], -1)) # FP
+                    # (TP, conf, pred_cls, iou)
+                    self.stats.append((0, float(det[4]), int(det[6]), 0.0)) # FP
                 continue
                 
             # 计算 IoU 矩阵 (N_det, N_gt)
@@ -262,6 +222,7 @@ class DetectionMetrics:
             for i, det in enumerate(detections):
                 # 找到该预测框与所有 GT 的最大 IoU
                 max_iou, max_idx = torch.max(iou_matrix[i], dim=0)
+                max_iou = float(max_iou)
                 
                 if max_iou > self.iou_thresh:
                     # 如果 IoU 达标
@@ -271,30 +232,105 @@ class DetectionMetrics:
                         # 该 GT 尚未被匹配
                         if det[6] == gt_cls:
                             # 类别正确 -> TP
-                            self.stats.append((1, det[4], det[6], gt_cls))
+                            self.stats.append((1, float(det[4]), int(det[6]), max_iou))
                             gt_matched[max_idx] = True
                         else:
                             # 类别错误 -> FP
-                            self.stats.append((0, det[4], det[6], gt_cls))
+                            self.stats.append((0, float(det[4]), int(det[6]), max_iou))
                     else:
                         # 该 GT 已被更优的框匹配 -> FP (重复检测)
-                        self.stats.append((0, det[4], det[6], -1))
+                        self.stats.append((0, float(det[4]), int(det[6]), max_iou))
                 else:
                     # IoU 不足 -> FP
-                    self.stats.append((0, det[4], det[6], -1))
+                    self.stats.append((0, float(det[4]), int(det[6]), max_iou))
 
-    def compute(self) -> Tuple[float, float, float]:
-        """计算最终指标"""
+    def compute_ap(self, recall, precision):
+        """ 计算平均精度（Average Precision, AP），输入为召回率和精确率曲线。
+        代码来源：https://github.com/rbgirshick/py-faster-rcnn.
+        # 参数
+            recall:    召回率曲线（列表形式）。
+            precision: 精确率曲线（列表形式）。
+        # 返回值
+            按照 py-faster-rcnn 实现方式计算得到的平均精度（AP）。
+        """
+        # 标准的 AP 计算流程
+        # 第一步：在曲线首尾添加哨兵值（边界补全）
+        mrec = np.concatenate(([0.0], recall, [1.0]))  # 补全后的召回率数组
+        mpre = np.concatenate(([0.0], precision, [0.0]))  # 补全后的精确率数组
+
+        # 计算精确率的上包络线（从后往前取最大值，保证精确率非递增）
+        for i in range(mpre.size - 1, 0, -1):
+            mpre[i - 1] = np.maximum(mpre[i - 1], mpre[i])
+
+        # 寻找召回率曲线中数值发生变化的点（X轴变化的位置）
+        i = np.where(mrec[1:] != mrec[:-1])[0]
+
+        # 计算PR曲线下的面积：累加（召回率变化量 × 对应位置的精确率）
+        ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
+        return ap
+
+    def compute(self) -> Tuple[float, float, float, float]:
+        """计算最终指标: Precision, Recall, mAP, mIoU"""
         if not self.stats:
-            return 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0
             
-        tp = sum([s[0] for s in self.stats])
-        total_pred = len(self.stats)
+        # 转换为 numpy 数组
+        # stats: [TP, conf, pred_cls, iou]
+        stats = np.array(self.stats)
+        tp = stats[:, 0]
+        conf = stats[:, 1]
+        pred_cls = stats[:, 2]
+        ious = stats[:, 3]
         
-        precision = tp / max(1, total_pred)
-        recall = tp / max(1, self.total_targets)
+        # 1. 计算 Global Precision, Recall, mIoU
+        total_tp = np.sum(tp)
+        total_pred = len(stats)
+        total_target = len(self.gt_classes)
         
-        # 简化版 mIoU，暂未完整实现
-        miou = 0.0 
+        precision = total_tp / max(1, total_pred)
+        recall = total_tp / max(1, total_target)
         
-        return precision, recall, miou
+        if total_tp > 0:
+            miou = np.mean(ious[tp == 1])
+        else:
+            miou = 0.0
+            
+        # 2. 计算 mAP
+        unique_classes = np.unique(self.gt_classes)
+        ap_list = []
+        
+        for c in unique_classes:
+            # 获取该类别的预测
+            cls_mask = (pred_cls == c)
+            
+            # 总 GT 数量
+            n_gt = np.sum(np.array(self.gt_classes) == c)
+            if n_gt == 0:
+                continue
+            
+            if not np.any(cls_mask):
+                ap_list.append(0.0)
+                continue
+                
+            c_tp = tp[cls_mask]
+            c_conf = conf[cls_mask]
+            
+            # 按置信度排序
+            sort_idx = np.argsort(-c_conf)
+            c_tp = c_tp[sort_idx]
+            
+            # 计算 TP 和 FP 的累积和
+            tp_cumsum = np.cumsum(c_tp)
+            fp_cumsum = np.cumsum(1 - c_tp)
+            
+            # 计算 Precision 和 Recall 曲线
+            rec = tp_cumsum / (n_gt + 1e-16)
+            prec = tp_cumsum / (tp_cumsum + fp_cumsum + 1e-16)
+            
+            # 计算 AP
+            ap = self.compute_ap(rec, prec)
+            ap_list.append(ap)
+            
+        map_score = np.mean(ap_list) if ap_list else 0.0
+        
+        return precision, recall, map_score, miou

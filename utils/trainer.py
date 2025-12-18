@@ -159,11 +159,11 @@ class Trainer:
         avg_loss = total_loss / max(1, len(self.dataloader))
         
         # 计算 Epoch 级指标
-        precision, recall, miou = metrics.compute()
-        self.logger.info(f'Epoch [{epoch}/{self.epochs}] - loss: {avg_loss:.4f}, precision@0.5: {precision:.3f}, recall@0.5: {recall:.3f}, mIoU: {miou:.3f}')
+        precision, recall, map_score, miou = metrics.compute()
+        self.logger.info(f'Epoch [{epoch}/{self.epochs}] - loss: {avg_loss:.4f}, precision@{iou_thresh:.2f}: {precision:.3f}, recall@{iou_thresh:.2f}: {recall:.3f}, mAP: {map_score:.3f}, mIoU: {miou:.3f}')
         
         if self.recorder is not None:
-            self.recorder.record_epoch(epoch, avg_loss, precision, recall, miou, get_lr(self.optimizer))
+            self.recorder.record_epoch(epoch, avg_loss, precision, recall, map_score, miou, get_lr(self.optimizer))
             
         return avg_loss
 

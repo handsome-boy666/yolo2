@@ -55,13 +55,14 @@ class TrainingRecorder:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(data, ensure_ascii=False) + "\n")
 
-    def record_epoch(self, epoch: int, loss: float, precision: float, recall: float, miou: float, lr: Optional[float] = None) -> None:
+    def record_epoch(self, epoch: int, loss: float, precision: float, recall: float, map_score: float, miou: float, lr: Optional[float] = None) -> None:
         """记录 Epoch 级别的指标"""
         data = {
             "epoch": int(epoch),
             "loss": float(loss),
             "precision": float(precision),
             "recall": float(recall),
+            "map": float(map_score),
             "miou": float(miou),
             "lr": (None if lr is None else float(lr)),
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
