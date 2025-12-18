@@ -4,7 +4,7 @@ train:
   data_dir: "dataset/PVZ_Lawn"
   num_anchors: 5
   base_img_size: 416
-  continue_model: 'logs\20251216_200831\checkpoints\epoch_100.pth' # 继续训练的模型路径
+  continue_model: '' # 继续训练的模型路径
   num_classes: 24
 
   # 训练参数

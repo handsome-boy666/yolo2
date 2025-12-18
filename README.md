@@ -8,14 +8,16 @@
 
 #### 改进2：直接位置预测（Direct location prediction）
 模型输出不再是直接的框坐标，而是锚框的 **x/y 偏移量**和**w/h 缩放因子**：
-*  $t_x$ 、 $t_y$ 为模型预测的锚框中心坐标偏移量
-*  $t_w$ 、 $t_h$ 为模型预测的锚框宽度、高度缩放因子
+*  $\sigma(t_x)$ 、 $\sigma(t_y)$ 为锚框中心坐标偏移量
+*  $t_w$ 、 $t_h$ 为锚框宽度、高度缩放因子
 
 最终框坐标通过公式解码：
 *  $b_x = \sigma(t_x) + c_x$ （ $c_x$ 为网格左上角 x 坐标， $\sigma(t_x)$ 限制偏移量在 0~1 之间）
 *  $b_y = \sigma(t_y) + c_y$ （ $c_y$ 为网格左上角 y 坐标）
 *  $b_w = p_w \cdot e^{t_w}$ （ $p_w$ 为锚框原始宽度， $t_w$ 为模型预测的宽度缩放因子）
 *  $b_h = p_h \cdot e^{t_h}$ （ $p_h$ 为锚框原始高度， $t_h$ 为模型预测的高度缩放因子）
+
+> Q：为什么要对数变换？A：平衡大小目标损失贡献
 
 这种设计将**直接回归框尺寸**转化为**回归锚框的相对偏移**，大幅降低了回归难度，提升了框预测的稳定性。因此，输入一张图片，模型的输出为 $S \times S \times (k \times 5 + C)$，其中 $S$ 为特征图尺寸， $k$ 为每个网格预设的锚框数， $C$ 为类别数。
 #### 改进3：维度聚类（Dimension Clusters）：找锚框的方法
@@ -50,26 +52,27 @@ YOLOv2 损失函数和YOLOv1类似,但略有不同
 $$
 Loss = \lambda_{coord} \cdot Loss_{coord} + Loss_{obj} + \lambda_{noobj} \cdot Loss_{noobj} + Loss_{class}
 $$
+*  $\sigma(t_x)$ 、 $\sigma(t_y)$ 为锚框中心坐标偏移量, $\hat{t}_x$ 、 $\hat{t}_y$ 为模型预测的锚框中心坐标偏移量(取sigmoid前)
+*  $t_w$ 、 $t_h$ 为锚框宽度、高度缩放因子， $\hat{t}_w$ 、 $\hat{t}_h$ 为模型预测的锚框宽度、高度缩放因子
+*  $conf_{pred}$ 为模型预测的锚框置信度
+*  $P_c$ 为 GT 框所属类别概率（0/1）， $\hat{P}_c$ 为模型预测的 GT 框所属类别概率
 
 **一、坐标回归损失**：仅正样本参与，宽高对数变换平衡大小目标（权重5.0，强化定位精度）：
 
 $$
-Loss_{coord} = \sum \mathbb{1}^{obj} \left[( \sigma {(t_x)}-\hat{t}_x)^2 + ( \sigma {(t_y)}-\hat{t}_y)^2 + (t_w-\hat{t}_w)^2 + (t_h-\hat{t}_h)^2\right]
+Loss_{coord} = \sum \mathbb{1}^{obj} \left[( \sigma {(t_x)}-\sigma(\hat{t}_x))^2 + ( \sigma {(t_y)}-\sigma(\hat{t}_y))^2 + (t_w-\hat{t}_w)^2 + (t_h-\hat{t}_h)^2\right]
 $$
 
-$\hat{t}_x/\hat{t}_y$ 为 GT 网格内偏移，$\hat{t}_w/\hat{t}_h$ 为 GT 宽高相对锚框的对数缩放。
-
-Q：为什么要对数变换？A：平衡大小目标损失贡献
 
 **二、置信度损失**：有目标置信度预测（MSE）和无目标置信度预测（MSE）：
 
 - 有目标：
 
-$$Loss_{obj} = \sum \mathbb{1}^{obj} (conf_{pred} - IOU(pred, gt))^2$$
+$$Loss_{obj} = \sum \mathbb{1}^{obj} (\sigma(conf_{pred}) - IOU(pred, gt))^2$$
 
 - 无目标（权重0.5，缓解正负样本不均衡）：
 
-$$Loss_{noobj} = \sum \mathbb{1}^{noobj} (conf_{pred} - 0)^2$$
+$$Loss_{noobj} = \sum \mathbb{1}^{noobj} (\sigma(conf_{pred}) - 0)^2$$
 
 **三、类别损失**：仅正样本参与，单/多标签分别用交叉熵/BCE：
 

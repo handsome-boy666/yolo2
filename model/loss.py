@@ -48,7 +48,7 @@ class YOLOv2Loss(nn.Module):
         
         # 初始化 Mask 和 Target 张量
         mask = torch.zeros(B, num_anchors, H, W, device=device)
-        tx_ty_target = torch.zeros(B, num_anchors, H, W, 2, device=device)
+        sigmoid_tx_ty_target = torch.zeros(B, num_anchors, H, W, 2, device=device)
         tw_th_target = torch.zeros(B, num_anchors, H, W, 2, device=device)
         cls_target = torch.zeros(B, num_anchors, H, W, dtype=torch.long, device=device)
         
@@ -93,8 +93,8 @@ class YOLOv2Loss(nn.Module):
                 mask[b, anchor_idx, y, x] = 1
                 
                 # 坐标偏移 Target (相对于网格左上角)
-                tx_ty_target[b, anchor_idx, y, x, 0] = gx[i] - x.float()
-                tx_ty_target[b, anchor_idx, y, x, 1] = gy[i] - y.float()
+                sigmoid_tx_ty_target[b, anchor_idx, y, x, 0] = gx[i] - x.float()
+                sigmoid_tx_ty_target[b, anchor_idx, y, x, 1] = gy[i] - y.float()
                 
                 # 尺寸缩放 Target (相对于 Anchor)，使用对数变换，因此不需要开根号计算损失
                 tw_th_target[b, anchor_idx, y, x, 0] = torch.log(gw[i] / anchors_scaled[anchor_idx, 0] + 1e-16)
@@ -103,7 +103,7 @@ class YOLOv2Loss(nn.Module):
                 # 类别 Target
                 cls_target[b, anchor_idx, y, x] = batch_target[i, 1].long()
 
-        return mask, tx_ty_target, tw_th_target, cls_target
+        return mask, sigmoid_tx_ty_target, tw_th_target, cls_target
 
     def forward(self, pred, target, S=13):
         """
@@ -118,14 +118,14 @@ class YOLOv2Loss(nn.Module):
         pred = pred.view(B, self.num_anchors, 5 + self.num_classes, H, W)
         pred = pred.permute(0, 1, 3, 4, 2).contiguous()
         
-        pred_txty = torch.sigmoid(pred[..., 0:2])
+        pred_txty = pred[..., 0:2]
         pred_twth = pred[..., 2:4]
-        pred_conf = torch.sigmoid(pred[..., 4])
+        sigma_pred_conf = torch.sigmoid(pred[..., 4])
         pred_cls  = pred[..., 5:]
 
         # 2. 构建 Targets
         with torch.no_grad():
-            mask, tx_ty_target, tw_th_target, cls_target = self.build_targets(
+            mask, sigmoid_tx_ty_target, tw_th_target, cls_target = self.build_targets(
                 pred.shape, target, self.anchors, device
             )
 
@@ -135,17 +135,17 @@ class YOLOv2Loss(nn.Module):
         neg_mask = (mask == 0)
 
         # Coordinate Loss (MSE)
-        loss_x = F.mse_loss(pred_txty[..., 0][pos_mask], tx_ty_target[..., 0][pos_mask], reduction='sum')
-        loss_y = F.mse_loss(pred_txty[..., 1][pos_mask], tx_ty_target[..., 1][pos_mask], reduction='sum')
+        loss_x = F.mse_loss(torch.sigmoid(pred_txty[..., 0][pos_mask]), sigmoid_tx_ty_target[..., 0][pos_mask], reduction='sum')
+        loss_y = F.mse_loss(torch.sigmoid(pred_txty[..., 1][pos_mask]), sigmoid_tx_ty_target[..., 1][pos_mask], reduction='sum')
         loss_w = F.mse_loss(pred_twth[..., 0][pos_mask], tw_th_target[..., 0][pos_mask], reduction='sum')   # 对数偏移
         loss_h = F.mse_loss(pred_twth[..., 1][pos_mask], tw_th_target[..., 1][pos_mask], reduction='sum')
         loss_coord = self.lambda_coord * (loss_x + loss_y + loss_w + loss_h)
 
         # Confidence Loss (MSE)
         # Object (target=1)
-        loss_conf_obj = F.mse_loss(pred_conf[pos_mask], torch.ones_like(pred_conf[pos_mask]), reduction='sum')
+        loss_conf_obj = F.mse_loss(sigma_pred_conf[pos_mask], torch.ones_like(sigma_pred_conf[pos_mask]), reduction='sum')
         # No Object (target=0)
-        loss_conf_noobj = F.mse_loss(pred_conf[neg_mask], torch.zeros_like(pred_conf[neg_mask]), reduction='sum')
+        loss_conf_noobj = F.mse_loss(sigma_pred_conf[neg_mask], torch.zeros_like(sigma_pred_conf[neg_mask]), reduction='sum')
         loss_conf = loss_conf_obj + self.lambda_noobj * loss_conf_noobj
 
         # Class Loss (CrossEntropy)
