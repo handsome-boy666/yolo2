@@ -1,15 +1,16 @@
 train:
   device: "cuda:0"
-  num_workers: 4
+  num_workers: 2
   data_dir: "dataset/PVZ_Lawn"
   num_anchors: 5
   base_img_size: 416
-  continue_model: 'logs\20251217_164316\checkpoints\epoch_200.pth' # 继续训练的模型路径
-  num_classes: 24
+  fix_img_size: False  # 是否固定训练图像大小, 若为 True 则使用 base_img_size, 否则随机选择 multi_scale_sizes 中的尺寸
+  continue_model: ""  # 继续训练的模型路径, 若为空则从头开始训练
+  num_classes: 24 # 类别数量, 包括背景类别
 
   # 训练参数
   batch_size: 8
-  epochs: 200
+  epochs: 210
   save_interval: 10
 
   # 训练参数

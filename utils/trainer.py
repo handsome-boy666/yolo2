@@ -49,23 +49,26 @@ class Trainer:
         # 多尺度训练参数
         self.multi_scale_sizes = [sz for sz in range(320, 608 + 32, 32)]
 
-    def load_checkpoint(self, checkpoint_path: str) -> None:
+    def try_load_checkpoint(self, checkpoint_path: str) -> None:
         """
         加载模型检查点以恢复训练。
         """
         if not checkpoint_path or not os.path.exists(checkpoint_path):
             self.logger.info("[Resume] 未找到检查点或路径为空，将从头开始训练。")
             return
-
-        self.logger.info(f'[Resume] 检测到已有模型: {checkpoint_path}')
         
-        # 简单交互：在自动化脚本中可移除或改为参数控制
         try:
-            # 假设用户总是想在提供路径时继续训练，或者添加参数控制
-            # 这里为了保持原有逻辑，我们检查文件是否存在
-            pass
+            ans = input("检测到已有训练模型，是否要继续训练？(y/n) ").strip()
+            while ans not in ('y', 'Y', 'n', 'N'):
+                ans = input("请输入 y 或 n: ").strip()
+            if ans in ('n', 'N'):
+                self.logger.info("将从头开始训练。")
+                return
         except Exception:
-            pass
+            self.logger.info("交互失败，默认从头开始训练。")
+            return
+        
+        self.logger.info(f'[Resume] 检测到已有模型: {checkpoint_path}')
 
         try:
             state = torch.load(checkpoint_path, map_location=self.device)
@@ -175,17 +178,24 @@ class Trainer:
             epochs: 总训练轮数 (如果不指定，使用初始化时的 self.epochs)
             save_interval: 保存间隔 (如果不指定，使用初始化时的 self.save_interval)
         """
-        if epochs is not None:
-            self.epochs = epochs
-        if save_interval is not None:
-            self.save_interval = save_interval
-            
+        self.epochs = epochs
+        self.save_interval = save_interval
+
+        self.try_load_checkpoint(self.config.get('continue_model')) # 尝试加载检查点继续训练
+        
         self.logger.info(f"开始训练... 总 Epochs: {self.epochs}, 保存间隔: {self.save_interval}")
         
+        fix_img_size = self.config.get('fix_img_size', False)
+        
         for epoch in range(self.start_epoch, self.epochs + 1):
-            # 多尺度训练：每个 Epoch 随机选择一个尺寸
-            current_img_size = random.choice(self.multi_scale_sizes)
-            self.logger.info(f"[Multi-Scale] Epoch {epoch}: 调整图像尺寸为 {current_img_size}x{current_img_size}")
+            # 根据 fix_img_size 决定尺寸策略
+            if fix_img_size:
+                current_img_size = self.base_img_size
+                self.logger.info(f"[Fixed-Size] Epoch {epoch}: 固定图像尺寸 {current_img_size}x{current_img_size}")
+            else:
+                # 多尺度训练：每个 Epoch 随机选择一个尺寸
+                current_img_size = random.choice(self.multi_scale_sizes)
+                self.logger.info(f"[Multi-Scale] Epoch {epoch}: 调整图像尺寸为 {current_img_size}x{current_img_size}")
             
             self.train_epoch(epoch, current_img_size)
             
