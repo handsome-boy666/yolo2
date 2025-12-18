@@ -35,6 +35,7 @@ def read_train_config(path: str) -> Dict[str, Any]:
         'batch_size': int(tcfg.get('batch_size')),
         'num_workers': int(tcfg.get('num_workers')),
         'base_img_size': int(tcfg.get('base_img_size')),
+        'fix_img_size': bool(tcfg.get('fix_img_size')),
         'epochs': int(tcfg.get('epochs')),
         'save_interval': int(tcfg.get('save_interval')),
         'device': str(tcfg.get('device', 'cuda:0')),

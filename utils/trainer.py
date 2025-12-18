@@ -31,6 +31,7 @@ class Trainer:
         config: Optional[Dict[str, Any]] = None
     ):
         self.model = model
+        self.config = config or {}
         self.dataloader = dataloader
         self.optimizer = optimizer
         self.device = device
@@ -40,8 +41,7 @@ class Trainer:
         self.logger = logger
         self.recorder = recorder
         self.save_interval = save_interval
-        self.base_img_size = base_img_size
-        self.config = config or {}
+        self.base_img_size = self.config.get('base_img_size', 416)
         self.epochs = self.config.get('epochs')
         
         self.start_epoch = 1
@@ -185,7 +185,7 @@ class Trainer:
         
         self.logger.info(f"开始训练... 总 Epochs: {self.epochs}, 保存间隔: {self.save_interval}")
         
-        fix_img_size = self.config.get('fix_img_size', False)
+        fix_img_size = self.config.get('fix_img_size')
         
         for epoch in range(self.start_epoch, self.epochs + 1):
             # 根据 fix_img_size 决定尺寸策略
