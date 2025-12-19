@@ -1,16 +1,16 @@
 train:
   device: "cuda:0"
   num_workers: 2
-  data_dir: "./dataset/PVZ_Lawn"
-  num_anchors: 5
-  base_img_size: 608
+  data_dir: "./dataset/qrcode_public"  # 数据集目录, 包含 train/ 和 test/ 子目录
+  num_anchors: 5  # 锚框数量
+  base_img_size: 608  # 基础图像大小, 用于训练和推理
   fix_img_size: True  # 是否固定训练图像大小, 若为 True 则使用 base_img_size, 否则随机选择 multi_scale_sizes 中的尺寸
-  continue_model: "logs/20251217_164316/checkpoints/epoch_200.pth"  # 继续训练的模型路径, 若为空则从头开始训练
-  num_classes: 24 # 类别数量, 包括背景类别
+  continue_model: "logs/20251218_200507/checkpoints/epoch_100.pth"  # 继续训练的模型路径, 若为空则从头开始训练
+  num_classes: 1 # 类别数量, 包括背景类别
 
   # 训练参数
   batch_size: 8
-  epochs: 220
+  epochs: 120
   save_interval: 10
 
   # 训练参数
@@ -20,35 +20,35 @@ train:
   lambda_coord: 5.0     # 坐标损失权重
   lambda_noobj: 0.5     # 无目标置信度损失权重
 
-  log_dir: "./logs"
+  log_dir: "./logs"  # 训练日志目录
 
   # 阈值配置
-  conf_thresh: 0.4      # 置信度阈值 (用于 NMS 前过滤)
-  nms_thresh: 0.45       # NMS IoU 阈值 (用于非极大值抑制)
+  conf_thresh: 0.8      # 置信度阈值 (用于 NMS 前过滤)
+  nms_thresh: 0.6       # NMS IoU 阈值 (用于非极大值抑制)
   iou_thresh: 0.6        # 评估 IoU 阈值 (用于计算 mAP/TP)
 
 predict:
   # 模型与数据
-  ckpt_path: "logs/20251218_174715/checkpoints/epoch_220.pth"
-  data_dir: "./dataset/PVZ_Lawn"
-  num_classes: 24
+  ckpt_path: "logs/20251219_100010/checkpoints/epoch_120.pth"
+  data_dir: "./dataset/qrcode_public"  # 需要把锚框的文件也放到这个目录下,命名为yolov2_anchors_k5.json，如dataset/PVZ_Lawn/yolov2_anchors_k5.json
+  num_classes: 1
   num_anchors: 5
   
   # 图像处理
-  img_size: 608
+  img_size: 608 # 预测时的图像输入尺寸 (需为32的倍数)
   
   # 阈值参数
-  conf_thresh: 0.4      # 置信度阈值 (用于 NMS 前过滤)
-  nms_thresh: 0.45       # NMS IoU 阈值 (用于非极大值抑制)
-  iou_thresh: 0.3        # 评估 IoU 阈值 (用于计算 mAP/TP)
+  conf_thresh: 0.6     # 置信度阈值 (用于 NMS 前过滤)
+  nms_thresh: 0.6       # NMS IoU 阈值 (用于非极大值抑制)
+  iou_thresh: 0.6        # 评估 IoU 阈值 (用于计算 mAP/TP)
   
   # 运行模式
-  run_test: true      # true: 运行批量测试; false: 单图预测
-  test_batch_size: 4      # 减小batch size以防OOM
-  num_workers: 0          # Windows下建议设为0
+  run_test: false      # true: 运行批量测试; false: 单图预测
+  test_batch_size: 4
+  num_workers: 0
   device: "cuda:0"
   
   # 路径配置
-  image_path: "dataset/PVZ_Lawn/test/images/frame_000078.jpg"  # 单图预测路径
+  image_path: "E:/my_workspace/yolo1_QR/dataset/Extreme-QR-DM344/test/images/qrcode_batch1_0_4_f.jpg"  # 单图预测路径
   out_dir: "predictions/single"                          # 单图输出目录
   save_dir: "predictions/test_results"                   # 测试结果根目录
